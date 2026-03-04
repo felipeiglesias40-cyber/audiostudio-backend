@@ -4,3 +4,4 @@ python-dotenv
 werkzeug
 requests
 gunicorn
+flask-cors
