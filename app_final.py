@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify, session, send_file, send_from_directory
+from flask_cors import CORS
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -14,6 +15,7 @@ import threading
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)  # Permite requisições do front-end (Vercel)
 app.secret_key = os.getenv('SECRET_KEY', 'chave-super-secreta')
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
@@ -31,6 +33,13 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+
+# ============================================
+# ROTA DE SAÚDE (PARA TESTES)
+# ============================================
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"})
 
 # ============================================
 # ROTAS DE AUTENTICAÇÃO
@@ -280,16 +289,9 @@ def dashboard():
     return send_from_directory('.', 'dashboard.html')
 
 # ============================================
-# INICIAR
+# INICIAR (SÓ PARA TESTE LOCAL)
 # ============================================
 
 if __name__ == '__main__':
-    print("="*60)
-    print("🎵 AudioStudio Online - Com GPU no Colab")
-    print("="*60)
-    print("📁 Uploads: uploads/")
-    print("🔗 Acesse: http://localhost:5000")
-    print("⚡ Processamento: 30-60 segundos (GPU)")
-    print("💰 Custo: R$ 0")
-    print("="*60)
+    # Esta parte só executa localmente, não no Render
     app.run(debug=True, port=5000)
