@@ -15,7 +15,7 @@ import threading
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # Permite requisições do front-end (Vercel)
+CORS(app, supports_credentials=True, origins=["https://audiostudio-site.vercel.app"])
 app.secret_key = os.getenv('SECRET_KEY', 'chave-super-secreta')
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
@@ -35,54 +35,86 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
 # ============================================
-# ROTA DE SAÚDE (PARA TESTES)
+# ROTA DE SAÚDE
 # ============================================
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok"})
 
 # ============================================
-# ROTAS DE AUTENTICAÇÃO
+# ROTAS DE AUTENTICAÇÃO (CORRIGIDAS)
 # ============================================
 
-@app.route('/register', methods=['POST'])
+@app.route('/register', methods=['GET', 'POST', 'OPTIONS'])
 def register():
-    data = request.json
-    email = data.get('email', '').lower().strip()
-    password = data.get('password', '')
-    name = data.get('name', 'Usuário')
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    if request.method == 'GET':
+        return jsonify({"message": "Método GET não suportado. Use POST."}), 405
     
-    if users.find_one({'email': email}):
-        return jsonify({'error': 'Email já cadastrado'}), 400
-    
-    user = {
-        'email': email,
-        'name': name,
-        'password_hash': generate_password_hash(password),
-        'created_at': datetime.utcnow(),
-        'plan': 'free',
-        'monthly_usage': 0
-    }
-    
-    result = users.insert_one(user)
-    session['user_id'] = str(result.inserted_id)
-    return jsonify({'success': True}), 201
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'Dados não fornecidos'}), 400
+            
+        email = data.get('email', '').lower().strip()
+        password = data.get('password', '')
+        name = data.get('name', 'Usuário')
+        
+        if not email or not password:
+            return jsonify({'error': 'Email e senha obrigatórios'}), 400
+        
+        if users.find_one({'email': email}):
+            return jsonify({'error': 'Email já cadastrado'}), 400
+        
+        user = {
+            'email': email,
+            'name': name,
+            'password_hash': generate_password_hash(password),
+            'created_at': datetime.utcnow(),
+            'plan': 'free',
+            'monthly_usage': 0
+        }
+        
+        result = users.insert_one(user)
+        session['user_id'] = str(result.inserted_id)
+        return jsonify({'success': True, 'user': {'id': str(result.inserted_id), 'email': email, 'name': name}}), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-@app.route('/login', methods=['POST'])
+@app.route('/login', methods=['GET', 'POST', 'OPTIONS'])
 def login():
-    data = request.json
-    email = data.get('email', '').lower().strip()
-    password = data.get('password', '')
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    if request.method == 'GET':
+        return jsonify({"message": "Método GET não suportado. Use POST."}), 405
     
-    user = users.find_one({'email': email})
-    if not user or not check_password_hash(user['password_hash'], password):
-        return jsonify({'error': 'Email ou senha inválidos'}), 401
-    
-    session['user_id'] = str(user['_id'])
-    return jsonify({'success': True})
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'Dados não fornecidos'}), 400
+            
+        email = data.get('email', '').lower().strip()
+        password = data.get('password', '')
+        
+        if not email or not password:
+            return jsonify({'error': 'Email e senha obrigatórios'}), 400
+        
+        user = users.find_one({'email': email})
+        if not user or not check_password_hash(user['password_hash'], password):
+            return jsonify({'error': 'Email ou senha inválidos'}), 401
+        
+        session['user_id'] = str(user['_id'])
+        return jsonify({'success': True, 'user': {'id': str(user['_id']), 'email': user['email'], 'name': user.get('name', '')}})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-@app.route('/logout', methods=['POST'])
+@app.route('/logout', methods=['POST', 'OPTIONS'])
 def logout():
+    if request.method == 'OPTIONS':
+        return '', 200
     session.clear()
     return jsonify({'success': True})
 
@@ -107,8 +139,11 @@ def usage():
 # ROTAS DE UPLOAD (COM COLAB)
 # ============================================
 
-@app.route('/upload', methods=['POST'])
+@app.route('/upload', methods=['POST', 'OPTIONS'])
 def upload_file():
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     if 'user_id' not in session:
         return jsonify({'error': 'Faça login primeiro'}), 401
     
@@ -136,7 +171,6 @@ def upload_file():
     result = songs.insert_one(song)
     song_id = str(result.inserted_id)
     
-    # Processar com Colab em background
     thread = threading.Thread(target=process_with_colab, args=(song_id, filepath, filename, session['user_id']))
     thread.daemon = True
     thread.start()
@@ -148,16 +182,11 @@ def upload_file():
     })
 
 def process_with_colab(song_id, filepath, filename, user_id):
-    """Processa usando o servidor Colab com GPU"""
     try:
         COLAB_URL = os.getenv('COLAB_URL')
         if not COLAB_URL:
             raise Exception("COLAB_URL não configurada no .env")
         
-        print(f"🎵 Enviando para Colab: {filename}")
-        print(f"📡 URL: {COLAB_URL}/upload")
-        
-        # 1. Upload para o Colab
         with open(filepath, 'rb') as f:
             files = {'file': (filename, f, 'audio/mpeg')}
             response = requests.post(
@@ -171,26 +200,18 @@ def process_with_colab(song_id, filepath, filename, user_id):
         
         data = response.json()
         task_id = data['task_id']
-        print(f"📤 Task ID: {task_id}")
         
-        # 2. Aguardar processamento
         tentativas = 0
-        while tentativas < 60:  # 5 minutos máximo
+        while tentativas < 60:
             time.sleep(5)
             tentativas += 1
-            
             status_response = requests.get(f"{COLAB_URL}/status/{task_id}")
             if status_response.status_code == 200:
                 status_data = status_response.json()
                 status = status_data.get('status')
                 
-                print(f"⏳ Status: {status} ({tentativas*5}s)")
-                
                 if status == 'completed':
-                    print("✅ Processamento concluído!")
                     arquivos = status_data.get('arquivos', [])
-                    
-                    # 3. Baixar arquivos
                     output_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'separated', song_id)
                     os.makedirs(output_dir, exist_ok=True)
                     
@@ -205,9 +226,7 @@ def process_with_colab(song_id, filepath, filename, user_id):
                                 for chunk in download_response.iter_content(8192):
                                     f.write(chunk)
                             stems_baixados.append(arq)
-                            print(f"   ✅ {arq}")
                     
-                    # 4. Atualizar banco
                     songs.update_one(
                         {'_id': ObjectId(song_id)},
                         {'$set': {
@@ -220,7 +239,6 @@ def process_with_colab(song_id, filepath, filename, user_id):
                         {'_id': ObjectId(user_id)},
                         {'$inc': {'monthly_usage': 1}}
                     )
-                    print(f"✅ Processado: {filename}")
                     return True
                     
                 elif status == 'failed':
@@ -230,7 +248,6 @@ def process_with_colab(song_id, filepath, filename, user_id):
         raise Exception("Tempo limite excedido")
         
     except Exception as e:
-        print(f"❌ Erro: {e}")
         songs.update_one(
             {'_id': ObjectId(song_id)},
             {'$set': {'status': 'error', 'error': str(e)}}
@@ -241,7 +258,6 @@ def process_with_colab(song_id, filepath, filename, user_id):
 def get_status(song_id):
     if 'user_id' not in session:
         return jsonify({'error': 'Não logado'}), 401
-    
     song = songs.find_one({'_id': ObjectId(song_id)})
     return jsonify({
         'status': song.get('status'),
@@ -253,10 +269,8 @@ def get_status(song_id):
 def download_stem(song_id, stem):
     if 'user_id' not in session:
         return jsonify({'error': 'Não logado'}), 401
-    
     song = songs.find_one({'_id': ObjectId(song_id)})
     stem_path = os.path.join(song.get('output_path', ''), stem)
-    
     if os.path.exists(stem_path):
         return send_file(stem_path, as_attachment=True)
     return jsonify({'error': 'Arquivo não encontrado'}), 404
@@ -265,12 +279,10 @@ def download_stem(song_id, stem):
 def list_songs():
     if 'user_id' not in session:
         return jsonify({'error': 'Não logado'}), 401
-    
     user_songs = songs.find(
         {'user_id': ObjectId(session['user_id'])},
         sort=[('created_at', -1)]
     )
-    
     return jsonify({'songs': [
         {'id': str(s['_id']), 'filename': s['filename'], 'status': s['status'], 'stems': s.get('stems', [])}
         for s in user_songs
@@ -288,10 +300,5 @@ def index():
 def dashboard():
     return send_from_directory('.', 'dashboard.html')
 
-# ============================================
-# INICIAR (SÓ PARA TESTE LOCAL)
-# ============================================
-
 if __name__ == '__main__':
-    # Esta parte só executa localmente, não no Render
     app.run(debug=True, port=5000)
